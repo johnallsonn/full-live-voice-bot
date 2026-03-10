@@ -30,13 +30,17 @@ pipeline {
 
         // ---------------------------------------------------------------
         // Stage 2: Write .env file from Jenkins Secret Credentials
-        // All API keys are stored safely in Jenkins, not in code
+        //
+        // OPENAI_API_KEY  → stored as "Secret file"  → use file() binding
+        // All others      → stored as "Secret text"  → use string() binding
         // ---------------------------------------------------------------
         stage('Write .env') {
             steps {
                 echo '=== Writing .env from Jenkins Credentials ==='
                 withCredentials([
-                    string(credentialsId: 'OPENAI_API_KEY',       variable: 'OPENAI_API_KEY'),
+                    // OPENAI_API_KEY is a Secret FILE — Jenkins gives us a temp file path
+                    file(credentialsId: 'OPENAI_API_KEY',         variable: 'OPENAI_KEY_FILE'),
+                    // All others are Secret TEXT
                     string(credentialsId: 'DEEPGRAM_API_KEY',     variable: 'DEEPGRAM_API_KEY'),
                     string(credentialsId: 'LIVEKIT_URL',          variable: 'LIVEKIT_URL'),
                     string(credentialsId: 'LIVEKIT_API_KEY',      variable: 'LIVEKIT_API_KEY'),
@@ -45,9 +49,12 @@ pipeline {
                     string(credentialsId: 'ASSEMBLYAI_API_KEY',   variable: 'ASSEMBLYAI_API_KEY')
                 ]) {
                     sh """
+                        # Read the OPENAI key from the Secret file Jenkins mounted
+                        OPENAI_API_KEY=\$(cat \$OPENAI_KEY_FILE | tr -d '[:space:]')
+
                         cat > ${DEPLOY_PATH}/.env << EOF
 GEMINI_API_KEY=${GEMINI_API_KEY}
-OPENAI_API_KEY=${OPENAI_API_KEY}
+OPENAI_API_KEY=\${OPENAI_API_KEY}
 DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
 LIVEKIT_URL=${LIVEKIT_URL}
 LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
