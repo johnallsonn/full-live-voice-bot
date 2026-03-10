@@ -2,85 +2,124 @@ pipeline {
     agent any
 
     environment {
-        SSH_CREDENTIAL_ID = 'ResearchQuest-chatbot'  // Jenkins Credential ID for EC2 SSH
-        EC2_USER          = 'ubuntu'
-        EC2_IP            = '34.233.64.193'
-        DEPLOY_PATH       = '/home/ubuntu/deepgram_agent'
-        REPO_URL          = 'https://github.com/johnallsonn/full-live-voice-bot.git'
-        BRANCH            = 'main'
+        DEPLOY_PATH = '/home/ubuntu/deepgram_agent'
+        BRANCH      = 'main'
     }
 
     stages {
 
-        stage('Checkout') {
+        // ---------------------------------------------------------------
+        // Stage 1: Pull latest code on EC2 (Jenkins is running on EC2)
+        // No SSH needed — Jenkins itself runs on this machine
+        // ---------------------------------------------------------------
+        stage('Pull Code') {
             steps {
-                echo '=== Checking out source code ==='
-                checkout scm
+                echo '=== Pulling latest code from GitHub ==='
+                dir("${DEPLOY_PATH}") {
+                    sh '''
+                        if [ -d ".git" ]; then
+                            git fetch origin
+                            git reset --hard origin/${BRANCH}
+                        else
+                            git clone -b ${BRANCH} $(git remote get-url origin 2>/dev/null || echo "https://github.com/johnallsonn/full-live-voice-bot.git") ${DEPLOY_PATH}
+                        fi
+                    '''
+                }
             }
         }
 
-        stage('Deploy to EC2') {
+        // ---------------------------------------------------------------
+        // Stage 2: Write .env file from Jenkins Secret Credentials
+        // All API keys are stored safely in Jenkins, not in code
+        // ---------------------------------------------------------------
+        stage('Write .env') {
             steps {
-                echo '=== Deploying to EC2 ==='
-                sshagent(credentials: [SSH_CREDENTIAL_ID]) {
+                echo '=== Writing .env from Jenkins Credentials ==='
+                withCredentials([
+                    string(credentialsId: 'OPENAI_API_KEY',       variable: 'OPENAI_API_KEY'),
+                    string(credentialsId: 'DEEPGRAM_API_KEY',     variable: 'DEEPGRAM_API_KEY'),
+                    string(credentialsId: 'LIVEKIT_URL',          variable: 'LIVEKIT_URL'),
+                    string(credentialsId: 'LIVEKIT_API_KEY',      variable: 'LIVEKIT_API_KEY'),
+                    string(credentialsId: 'LIVEKIT_API_SECRET',   variable: 'LIVEKIT_API_SECRET'),
+                    string(credentialsId: 'GEMINI_API_KEY',       variable: 'GEMINI_API_KEY'),
+                    string(credentialsId: 'ASSEMBLYAI_API_KEY',   variable: 'ASSEMBLYAI_API_KEY')
+                ]) {
                     sh """
-                        ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_IP} '
-                            set -e
-
-                            echo "--- Pulling latest code ---"
-                            if [ -d "${DEPLOY_PATH}/.git" ]; then
-                                cd ${DEPLOY_PATH}
-                                git fetch origin
-                                git reset --hard origin/${BRANCH}
-                            else
-                                mkdir -p ${DEPLOY_PATH}
-                                git clone -b ${BRANCH} ${REPO_URL} ${DEPLOY_PATH}
-                                cd ${DEPLOY_PATH}
-                            fi
-
-                            echo "--- Copying .env if not present ---"
-                            if [ ! -f "${DEPLOY_PATH}/.env" ]; then
-                                echo "WARNING: .env file not found at ${DEPLOY_PATH}/.env"
-                                echo "Please manually copy your .env file to the server."
-                            fi
-
-                            echo "--- Installing Python dependencies ---"
-                            cd ${DEPLOY_PATH}
-                            python3 -m pip install --upgrade pip --quiet
-                            python3 -m pip install -r requirements.txt --quiet
-
-                            echo "--- Building Next.js Frontend ---"
-                            cd ${DEPLOY_PATH}/agent-starter-react-main
-                            pnpm install --frozen-lockfile
-                            pnpm build
-
-                            echo "--- Restarting Python Agent Service ---"
-                            sudo systemctl daemon-reload
-                            sudo systemctl restart deepgram-agent
-                            sudo systemctl enable deepgram-agent
-
-                            echo "--- Restarting Frontend Service ---"
-                            sudo systemctl restart deepgram-frontend
-                            sudo systemctl enable deepgram-frontend
-
-                            echo "--- Checking service statuses ---"
-                            sudo systemctl status deepgram-agent --no-pager
-                            sudo systemctl status deepgram-frontend --no-pager
-
-                            echo "=== Deployment Complete ==="
-                        '
+                        cat > ${DEPLOY_PATH}/.env << EOF
+GEMINI_API_KEY=${GEMINI_API_KEY}
+OPENAI_API_KEY=${OPENAI_API_KEY}
+DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+LIVEKIT_URL=${LIVEKIT_URL}
+LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+ASSEMBLYAI_API_KEY=${ASSEMBLYAI_API_KEY}
+EOF
+                        echo ".env written successfully"
                     """
                 }
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // Stage 3: Install Python dependencies
+        // ---------------------------------------------------------------
+        stage('Install Python Deps') {
+            steps {
+                echo '=== Installing Python dependencies ==='
+                dir("${DEPLOY_PATH}") {
+                    sh '''
+                        python3 -m pip install --upgrade pip --quiet
+                        python3 -m pip install -r requirements.txt --quiet
+                        echo "Python deps installed ✓"
+                    '''
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // Stage 4: Build Next.js Frontend
+        // ---------------------------------------------------------------
+        stage('Build Frontend') {
+            steps {
+                echo '=== Building Next.js frontend ==='
+                dir("${DEPLOY_PATH}/agent-starter-react-main") {
+                    sh '''
+                        export PNPM_HOME="$HOME/.local/share/pnpm"
+                        export PATH="$PNPM_HOME:$PATH"
+                        pnpm install --frozen-lockfile
+                        pnpm build
+                        echo "Frontend built ✓"
+                    '''
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // Stage 5: Restart Services via systemd
+        // ---------------------------------------------------------------
+        stage('Restart Services') {
+            steps {
+                echo '=== Restarting services ==='
+                sh '''
+                    sudo systemctl daemon-reload
+                    sudo systemctl restart deepgram-agent
+                    sudo systemctl restart deepgram-frontend
+                    echo "Services restarted ✓"
+                '''
+                sh '''
+                    sudo systemctl status deepgram-agent --no-pager || true
+                    sudo systemctl status deepgram-frontend --no-pager || true
+                '''
             }
         }
     }
 
     post {
         success {
-            echo '✅ Deployment SUCCESSFUL! App is live at http://${EC2_IP}:3000'
+            echo '✅ Deployment SUCCESSFUL! App is live at http://34.233.64.193:3000'
         }
         failure {
-            echo '❌ Deployment FAILED! Check console output above for errors.'
+            echo '❌ Deployment FAILED — check the stage logs above.'
         }
     }
 }
