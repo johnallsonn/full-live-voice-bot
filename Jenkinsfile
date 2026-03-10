@@ -38,8 +38,9 @@ pipeline {
             steps {
                 echo '=== Writing .env from Jenkins Credentials ==='
                 withCredentials([
-                    // OPENAI_API_KEY is a Secret FILE — Jenkins gives us a temp file path
-                    file(credentialsId: 'OPENAI_API_KEY',         variable: 'OPENAI_KEY_FILE'),
+                    // OPENAI_API_KEY is a Secret FILE — use unique ID 'VOICEBOT_OPENAI_API_KEY'
+                    // (different from the existing OPENAI_API_KEY credential for another project)
+                    file(credentialsId: 'VOICEBOT_OPENAI_API_KEY',    variable: 'OPENAI_KEY_FILE'),
                     // All others are Secret TEXT
                     string(credentialsId: 'DEEPGRAM_API_KEY',     variable: 'DEEPGRAM_API_KEY'),
                     string(credentialsId: 'LIVEKIT_URL',          variable: 'LIVEKIT_URL'),
