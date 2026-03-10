@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        DEPLOY_PATH = '/home/ubuntu/deepgram_agent'
+        DEPLOY_PATH = '/var/lib/jenkins/deepgram_agent'
         BRANCH      = 'main'
     }
 

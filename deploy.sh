@@ -12,7 +12,7 @@
 
 set -e
 
-DEPLOY_PATH="/home/ubuntu/deepgram_agent"
+DEPLOY_PATH="/var/lib/jenkins/deepgram_agent"
 REPO_URL="https://github.com/johnallsonn/full-live-voice-bot.git"
 BRANCH="main"
 
