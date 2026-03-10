@@ -96,11 +96,8 @@ EOF
                         nvm install 20
                         nvm use 20
                         
-                        # 2. Enable corepack for pnpm (safer than global npm install)
-                        corepack enable pnpm
-                        
-                        # 3. Install pm2 locally
-                        npm install -g pm2
+                        # 2. Install pnpm and pm2 locally
+                        npm install -g pnpm pm2
                         
                         # 4. Build Next.js (with increased memory limit to prevent JS heap OOM)
                         export NODE_OPTIONS="--max-old-space-size=4096"
