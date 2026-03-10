@@ -91,10 +91,11 @@ EOF
                             curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
                         fi
                         export NVM_DIR="$HOME/.nvm"
+                        set +x
                         [ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"
-                        
-                        nvm install 20
-                        nvm use 20
+                        nvm install 20 > /dev/null 2>&1
+                        nvm use 20 > /dev/null 2>&1
+                        set -x
                         
                         # 2. Install pnpm and pm2 locally
                         npm install -g pnpm pm2
@@ -116,8 +117,10 @@ EOF
                     sh '''
                         export PATH="$HOME/.local/bin:$PATH"
                         export NVM_DIR="$HOME/.nvm"
+                        set +x
                         [ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"
-                        nvm use 20
+                        nvm use 20 > /dev/null 2>&1
+                        set -x
                         
                         # Create a simple launcher for Python
                         echo "python3 agent.py start" > start_agent.sh
