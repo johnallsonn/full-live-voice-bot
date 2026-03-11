@@ -17,6 +17,7 @@ env/
 
 # Secrets — NEVER commit these
 .env
+openai_key.txt
 
 # TTS output files
 edge_tts_out.mp3

@@ -148,7 +148,7 @@ EOF
 
     post {
         success {
-            echo '✅ Deployment SUCCESSFUL! App is live at http://54.86.141.189:3000'
+            echo '✅ Deployment SUCCESSFUL! App is live at http://34.233.64.193:3001'
         }
         failure {
             echo '❌ Deployment FAILED — check the stage logs above.'
