@@ -113,7 +113,7 @@ Type=simple
 User=ubuntu
 WorkingDirectory=${DEPLOY_PATH}/agent-starter-react-main
 Environment=NODE_ENV=production
-Environment=PORT=3000
+Environment=PORT=3001
 ExecStart=${PNPM_PATH} start
 Restart=always
 RestartSec=5

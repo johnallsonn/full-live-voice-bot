@@ -2,33 +2,61 @@ pipeline {
     agent any
 
     environment {
-        DEPLOY_PATH = '/var/lib/jenkins/deepgram_agent'
-        BRANCH      = 'main'
+        // AWS EC2 Deployment Details
+        EC2_IP = '34.233.64.193'
+        EC2_USER = 'ubuntu'
+        EC2_HOST = "${EC2_USER}@${EC2_IP}"
+        SSH_CREDENTIAL_ID = 'ResearchQuest-chatbot'
+        DEPLOY_PATH = '/home/ubuntu/deepgram_agent'
+        BRANCH = 'main'
+        
         // Prevent Jenkins from killing background pm2 processes
         JENKINS_NODE_COOKIE = 'dontKillMe'
+        
+        // Path for local tools if needed
+        PATH = "/usr/bin:/usr/local/bin:${env.PATH}"
     }
 
     stages {
-
-        stage('Pull Code') {
+        stage('Checkout') {
             steps {
-                echo '=== Pulling latest code from GitHub ==='
-                dir("${DEPLOY_PATH}") {
-                    sh '''
-                        if [ -d ".git" ]; then
-                            git fetch origin
-                            git reset --hard origin/${BRANCH}
-                        else
-                            git clone -b ${BRANCH} $(git remote get-url origin 2>/dev/null || echo "https://github.com/johnallsonn/full-live-voice-bot.git") ${DEPLOY_PATH}
-                        fi
-                    '''
+                echo '=== Checking out code from SCM ==='
+                checkout scm
+            }
+        }
+
+        stage('Deploy to EC2') {
+            steps {
+                sshagent(credentials: ["${SSH_CREDENTIAL_ID}"]) {
+                    echo "=== Deploying to ${EC2_HOST} ==="
+                    
+                    // 1. Ensure remote directory exists
+                    sh "ssh -o StrictHostKeyChecking=no ${EC2_HOST} 'mkdir -p ${DEPLOY_PATH}'"
+                    
+                    // 2. Sync files using rsync
+                    echo '=== Syncing files to EC2 ==='
+                    sh "rsync -avz -e 'ssh -o StrictHostKeyChecking=no' --exclude 'venv' --exclude '.git' ./ ${EC2_HOST}:${DEPLOY_PATH}"
+                    
+                    // 3. Remote execution
+                    sh """
+                        ssh -o StrictHostKeyChecking=no ${EC2_HOST} << 'EOF'
+                            cd ${DEPLOY_PATH}
+                            
+                            echo "--- System Cleaning ---"
+                            sudo journalctl --vacuum-time=1d
+                            rm -rf ~/.cache/pip
+                            sudo apt-get clean
+                            
+                            echo "--- Writing .env from passed variables ---"
+                            # We'll handle secrets in the next sub-stage for better security/visibility
+EOF
+                    """
                 }
             }
         }
 
-        stage('Write .env') {
+        stage('Remote Setup & Restart') {
             steps {
-                echo '=== Writing .env from Jenkins Credentials ==='
                 withCredentials([
                     file(credentialsId: 'VOICEBOT_OPENAI_API_KEY',    variable: 'OPENAI_KEY_FILE'),
                     string(credentialsId: 'DEEPGRAM_API_KEY',     variable: 'DEEPGRAM_API_KEY'),
@@ -38,117 +66,84 @@ pipeline {
                     string(credentialsId: 'GEMINI_API_KEY',       variable: 'GEMINI_API_KEY'),
                     string(credentialsId: 'ASSEMBLYAI_API_KEY',   variable: 'ASSEMBLYAI_API_KEY')
                 ]) {
-                    sh """
-                        # Read the OPENAI key from the Secret file Jenkins mounted
-                        OPENAI_API_KEY=\$(cat \$OPENAI_KEY_FILE | tr -d '[:space:]')
-
-                        cat > ${DEPLOY_PATH}/.env << EOF
-GEMINI_API_KEY=${GEMINI_API_KEY}
+                    sshagent(credentials: ["${SSH_CREDENTIAL_ID}"]) {
+                        sh """
+                            ssh -o StrictHostKeyChecking=no ${EC2_HOST} << 'EOF'
+                                cd ${DEPLOY_PATH}
+                                
+                                # Export keys for .env generation
+                                export DEEPGRAM_API_KEY='${DEEPGRAM_API_KEY}'
+                                export LIVEKIT_URL='${LIVEKIT_URL}'
+                                export LIVEKIT_API_KEY='${LIVEKIT_API_KEY}'
+                                export LIVEKIT_API_SECRET='${LIVEKIT_API_SECRET}'
+                                export GEMINI_API_KEY='${GEMINI_API_KEY}'
+                                export ASSEMBLYAI_API_KEY='${ASSEMBLYAI_API_KEY}'
+                                
+                                # Read OpenAI key from secret file
+                                OPENAI_API_KEY=\$(cat \$OPENAI_KEY_FILE | tr -d '[:space:]')
+                                
+                                cat > .env << EOE
+GEMINI_API_KEY=\${GEMINI_API_KEY}
 OPENAI_API_KEY=\${OPENAI_API_KEY}
-DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
-LIVEKIT_URL=${LIVEKIT_URL}
-LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
-LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
-ASSEMBLYAI_API_KEY=${ASSEMBLYAI_API_KEY}
+DEEPGRAM_API_KEY=\${DEEPGRAM_API_KEY}
+LIVEKIT_URL=\${LIVEKIT_URL}
+LIVEKIT_API_KEY=\${LIVEKIT_API_KEY}
+LIVEKIT_API_SECRET=\${LIVEKIT_API_SECRET}
+ASSEMBLYAI_API_KEY=\${ASSEMBLYAI_API_KEY}
+EOE
+                                echo ".env generated"
+
+                                echo "--- Installing Python Deps ---"
+                                export PATH="\\$HOME/.local/bin:\\$PATH"
+                                if ! python3 -m pip --version > /dev/null 2>&1; then
+                                    curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py
+                                    python3 get-pip.py --user --break-system-packages || python3 get-pip.py --user
+                                fi
+                                python3 -m pip install --user --break-system-packages -r requirements.txt || python3 -m pip install --user -r requirements.txt
+                                
+                                echo "--- Installing Node & Building Frontend ---"
+                                cd agent-starter-react-main
+                                if [ ! -d "\\$HOME/.nvm" ]; then
+                                    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+                                fi
+                                export NVM_DIR="\\$HOME/.nvm"
+                                [ -s "\\$NVM_DIR/nvm.sh" ] && \\. "\\$NVM_DIR/nvm.sh"
+                                nvm install 20 > /dev/null 2>&1
+                                nvm use 20 > /dev/null 2>&1
+                                npm install -g pnpm pm2
+                                
+                                export NODE_OPTIONS="--max-old-space-size=4096"
+                                pnpm install --frozen-lockfile
+                                pnpm build
+                                
+                                echo "--- Restarting Services (PM2) ---"
+                                cd ${DEPLOY_PATH}
+                                echo "python3 agent.py start" > start_agent.sh
+                                chmod +x start_agent.sh
+                                
+                                pm2 delete deepgram-agent || true
+                                pm2 delete deepgram-frontend || true
+                                
+                                pm2 start ./start_agent.sh --name deepgram-agent
+                                cd agent-starter-react-main
+                                pm2 start npm --name deepgram-frontend -- run start
+                                
+                                pm2 save
+                                echo "Deployment Complete!"
 EOF
-                        echo ".env written successfully \u2713"
-                    """
-                }
-            }
-        }
-
-        stage('Install System & Python Deps') {
-            steps {
-                echo '=== Installing Pip and Python dependencies (100% Rootless) ==='
-                dir("${DEPLOY_PATH}") {
-                    sh '''
-                        export PATH="$HOME/.local/bin:$PATH"
-                        
-                        # 1. Install pip locally if missing (bypasses sudo requirement entirely)
-                        if ! python3 -m pip --version > /dev/null 2>&1; then
-                            echo "Downloading get-pip.py..."
-                            curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py
-                            python3 get-pip.py --user --break-system-packages || python3 get-pip.py --user
-                        fi
-                        
-                        # 2. Install requirements
-                        echo "Installing Python requirements..."
-                        python3 -m pip install --user --break-system-packages -r requirements.txt || python3 -m pip install --user -r requirements.txt
-                        echo "Python deps installed \u2713"
-                    '''
-                }
-            }
-        }
-
-        stage('Install Node & Build Frontend') {
-            steps {
-                echo '=== Installing Node, pnpm and Building Frontend (100% Rootless) ==='
-                dir("${DEPLOY_PATH}/agent-starter-react-main") {
-                    sh '''
-                        # 1. Install NVM & Node 20 if missing
-                        if [ ! -d "$HOME/.nvm" ]; then
-                            echo "Installing NVM and Node 20 locally..."
-                            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-                        fi
-                        export NVM_DIR="$HOME/.nvm"
-                        set +x
-                        [ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"
-                        nvm install 20 > /dev/null 2>&1
-                        nvm use 20 > /dev/null 2>&1
-                        set -x
-                        
-                        # 2. Install pnpm and pm2 locally
-                        npm install -g pnpm pm2
-                        
-                        # 4. Build Next.js (with increased memory limit to prevent JS heap OOM)
-                        export NODE_OPTIONS="--max-old-space-size=4096"
-                        pnpm install --frozen-lockfile
-                        pnpm build
-                        echo "Frontend built \u2713"
-                    '''
-                }
-            }
-        }
-
-        stage('Restart Services (PM2)') {
-            steps {
-                echo '=== Restarting services using PM2 (No sudo needed) ==='
-                dir("${DEPLOY_PATH}") {
-                    sh '''
-                        export PATH="$HOME/.local/bin:$PATH"
-                        export NVM_DIR="$HOME/.nvm"
-                        set +x
-                        [ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"
-                        nvm use 20 > /dev/null 2>&1
-                        set -x
-                        
-                        # Create a simple launcher for Python
-                        echo "python3 agent.py start" > start_agent.sh
-                        chmod +x start_agent.sh
-                        
-                        # Delete existing pm2 instances if they exist
-                        pm2 delete deepgram-agent || true
-                        pm2 delete deepgram-frontend || true
-                        
-                        # Start Agent
-                        pm2 start ./start_agent.sh --name deepgram-agent
-                        
-                        # Start Frontend
-                        cd agent-starter-react-main
-                        pm2 start npm --name deepgram-frontend -- run start
-                        
-                        pm2 save
-                        pm2 status
-                        echo "Services restarted with PM2 \u2713"
-                    '''
+                        """
+                    }
                 }
             }
         }
     }
 
     post {
+        always {
+            cleanWs()
+        }
         success {
-            echo '✅ Deployment SUCCESSFUL! App is live at http://34.233.64.193:3001'
+            echo "✅ Deployment SUCCESSFUL! App is live at http://${EC2_IP}:3001"
         }
         failure {
             echo '❌ Deployment FAILED — check the stage logs above.'
