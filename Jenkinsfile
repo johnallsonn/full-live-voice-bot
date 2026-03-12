@@ -94,7 +94,7 @@ EOE
                                 echo ".env generated"
 
                                 echo "--- Installing Python Deps ---"
-                                export PATH="\\$HOME/.local/bin:\\$PATH"
+                                export PATH="\$HOME/.local/bin:\$PATH"
                                 if ! python3 -m pip --version > /dev/null 2>&1; then
                                     curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py
                                     python3 get-pip.py --user --break-system-packages || python3 get-pip.py --user
@@ -103,11 +103,11 @@ EOE
                                 
                                 echo "--- Installing Node & Building Frontend ---"
                                 cd agent-starter-react-main
-                                if [ ! -d "\\$HOME/.nvm" ]; then
+                                if [ ! -d "\$HOME/.nvm" ]; then
                                     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
                                 fi
-                                export NVM_DIR="\\$HOME/.nvm"
-                                [ -s "\\$NVM_DIR/nvm.sh" ] && \\. "\\$NVM_DIR/nvm.sh"
+                                export NVM_DIR="\$HOME/.nvm"
+                                [ -s "\$NVM_DIR/nvm.sh" ] && . "\$NVM_DIR/nvm.sh"
                                 nvm install 20 > /dev/null 2>&1
                                 nvm use 20 > /dev/null 2>&1
                                 npm install -g pnpm pm2
